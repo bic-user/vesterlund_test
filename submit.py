@@ -30,8 +30,28 @@ text-align: center;
 </style>
 <body>
 
+<p style="margin-left:5px">{}</p>
+
+<form>
+{} + {} =
+<input id="text" type="text" size="4" style="margin-top:5px">
+<button id="button" name="enter" style="margin-left:5px" style="margin-top:5px">Submit</button>
+</form>
+
+<p style="margin-left:5px">{} seconds left...</p>
+
 <script>
 function q(selector) {{return document.querySelector(selector)}}
+q('#text').focus()
+q('#button').addEventListener('click', function(e) {{
+    val = q('#text').value.trim()
+    if (name) {{
+        window.location = '/submit' + window.location.search + '&val=' + val
+    }}
+    e.preventDefault()
+    return false
+}})
+
 </script>
 
 </body>
@@ -63,8 +83,9 @@ class Submit:
         account = account[0]
 
 
-        if (account['round1_started'] and not account['round1']) or (account['round2_start'] and not account['round2']):
+        if (account['round1_started'] and not account['round1']) or (account['round2_started'] and not account['round2']):
             # in process of round
+            prev_result = ''
         elif (not account['round1_started']) or (not account['round2_started']):
             # starting round: insert round start time, hit start time, idx, selected test scenario, selected opponent, round mode,
             # earned, timing for the the given round, toggle flag
@@ -86,9 +107,12 @@ class Submit:
                     acc_update['round2_opponent'] = self._get_opponent_for_scenario(scenario)
                 acc_update['round2_started'] = True
                 acc_update['round2_timings'] = self.db.search(Query().name == '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))[0]['round2_timings']
-
-            self.db.update(acc_update, Query().name == name)
-            
+            prev_result = ''
+            self.db.update(acc_update, Query().name == name)        
 
         res.content_type = 'text/html'
-        res.body = submit_body
+        time_left = int(round(180.0 - time.time() + self.db.search(Query().name == name)[0]['round_start']))
+        res.body = submit_body.format(prev_result,
+                                      test_scenarios['a_%d' % scenario][idx],
+                                      test_scenarios['b_%d' % scenario][idx],
+                                      time_left)
