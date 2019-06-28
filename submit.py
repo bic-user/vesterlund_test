@@ -1,8 +1,10 @@
 import time
 import random
+import falcon
 from tinydb import TinyDB, Query
 
 from test_data import *
+from message_body import *
 
 submit_body = '''<html><title>Vesterlund test</title>
 <style>
@@ -101,7 +103,7 @@ class Submit:
 
     def _get_time_left(self, name):
         round_start = self.db.search(Query().name == name)[0]['round_start']
-        time_left = int(round(180.0 - time.time() + round_start))
+        time_left = int(round(SECONDS - time.time() + round_start))
         return time_left
 
     def _get_time_for_hit(self, name):
@@ -130,7 +132,7 @@ class Submit:
             # in process of round
             suffix = '1' if in_round1 else '2'
             scenario = account['round%s_scenario' % suffix]
-            is_tournament = in_round1 or (in_round2 and acc_update['round2_mode'] == 'tournament')
+            is_tournament = in_round1 or (in_round2 and account['round2_mode'] == 'tournament')
             idx = account['idx']
             time_left = self._get_time_left(name)
 
@@ -139,44 +141,50 @@ class Submit:
                 self.db.update(acc_update, Query().name == name)        
                 if in_round1:
                     # go to round 2
-                    pass
+                    raise falcon.HTTPMovedPermanently('http://127.0.0.1:8080/mode?name=%s' % name)            
                 else:
                     # say thanks 
-                    pass
-                return
-
-            val = req.params.get('val')
-            try:
-                val_int = int(val)
-            except ValueError:
-                val_int = -1
-            earned = account['earned']
-            hit_time = self._get_time_for_hit(name)
-            expected_sum = test_scenarios['a_%d' % scenario][idx] + test_scenarios['b_%d' % scenario][idx]
-            if val_int == expected_sum:
-                if is_tournament:
-                    opponent_name = account['round%s_opponent' % suffix]
-                    opponent = self.db.search(Query().name == opponent_name)[0]
-                    if opponent['round1_scenario'] == scenario:
-                        opponent_timings = opponent['round1_timings']
-                    elif opponent['round2_scenario'] == scenario:
-                        opponent_timings = opponent['round2_timings']
-                    else:
-                        raise
-                    if hit_time > opponent_timings[idx]:
-                        prev_result = 'You were correct, but your opponent was faster. Previous hit took %s, your balance %.2f$' % (hit_time, earned)
-                    else:
-                        earned += 0.1
-                        prev_result = 'You were correct and outperform the opponent. Previous hit took %s, you earned 0.1$, current balance %.2f$' % (hit_time, earned)
-                else:
-                    earned += 0.05
-                    prev_result = 'You were correct! Previous hit took %s, you earned 0.05$, current balance %.2f$' % (hit_time, earned)
+                    res.body = message_body.format('You finished the test. Thanks! Your balance is %.2f' % account['earned']) 
             else:
-                prev_result = 'You were wrong! Previous hit took %s, your balance %.2f$' % (hit_time, earned)
-            timings = account['round%s_timings' % suffix]
-            timings[idx] = hit_time
-            idx += 1
-            acc_update = {'idx': idx, 'hit_start': time.time(), 'round%s_timings' % suffix: timings, 'earned': earned}
+                val = req.params.get('val')
+                try:
+                    val_int = int(val)
+                except ValueError:
+                    val_int = -1
+                earned = account['earned']
+                hit_time = self._get_time_for_hit(name)
+                expected_sum = test_scenarios['a_%d' % scenario][idx] + test_scenarios['b_%d' % scenario][idx]
+                if val_int == expected_sum:
+                    if is_tournament:
+                        opponent_name = account['round%s_opponent' % suffix]
+                        opponent = self.db.search(Query().name == opponent_name)[0]
+                        if opponent['round1_scenario'] == scenario:
+                            opponent_timings = opponent['round1_timings']
+                        elif opponent['round2_scenario'] == scenario:
+                            opponent_timings = opponent['round2_timings']
+                        else:
+                            raise
+                        if hit_time > opponent_timings[idx]:
+                            prev_result = 'You were correct, but your opponent was faster. Previous hit took %s, your balance %.2f$' % (hit_time, earned)
+                        else:
+                            earned += 0.1
+                            prev_result = 'You were correct and outperform the opponent. Previous hit took %s, you earned 0.1$, current balance %.2f$' % (hit_time, earned)
+                    else:
+                        earned += 0.05
+                        prev_result = 'You were correct! Previous hit took %s, you earned 0.05$, current balance %.2f$' % (hit_time, earned)
+                else:
+                    prev_result = 'You were wrong! Previous hit took %s, your balance %.2f$' % (hit_time, earned)
+                timings = account['round%s_timings' % suffix]
+                timings[idx] = hit_time
+                idx += 1
+                acc_update = {'idx': idx, 'hit_start': time.time(), 'round%s_timings' % suffix: timings, 'earned': earned}
+                self.db.update(acc_update, Query().name == name)        
+
+                res.content_type = 'text/html'
+                res.body = submit_body.format(prev_result,
+                                              test_scenarios['a_%d' % scenario][idx],
+                                              test_scenarios['b_%d' % scenario][idx],
+                                              time_left)
         elif round1_not_started or round2_not_started:
             # starting round: insert round start time, hit start time, idx, selected test scenario, selected opponent, round mode,
             # earned, timing for the the given round, toggle flag
@@ -199,12 +207,12 @@ class Submit:
                 acc_update['round2_started'] = True
                 acc_update['round2_timings'] = self.db.search(Query().name == '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))[0]['round2_timings']
             prev_result = ''
-            time_left = 300 
+            time_left = SECONDS 
             
-        self.db.update(acc_update, Query().name == name)        
+            self.db.update(acc_update, Query().name == name)        
 
-        res.content_type = 'text/html'
-        res.body = submit_body.format(prev_result,
-                                      test_scenarios['a_%d' % scenario][idx],
-                                      test_scenarios['b_%d' % scenario][idx],
-                                      time_left)
+            res.content_type = 'text/html'
+            res.body = submit_body.format(prev_result,
+                                          test_scenarios['a_%d' % scenario][idx],
+                                          test_scenarios['b_%d' % scenario][idx],
+                                          time_left)
