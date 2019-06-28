@@ -45,7 +45,7 @@ function q(selector) {{return document.querySelector(selector)}}
 q('#text').focus()
 q('#button').addEventListener('click', function(e) {{
     val = q('#text').value.trim()
-    if (name) {{
+    if (val) {{
         window.location = '/submit?name=' + window.location.search.split("name=")[1].split("&")[0] + '&val=' + val
     }}
     e.preventDefault()
@@ -53,6 +53,16 @@ q('#button').addEventListener('click', function(e) {{
 }})
 
 function validate(evt) {{
+
+  if (evt.which == 13) {{
+      val = q('#text').value.trim()
+      if (val) {{
+          window.location = '/submit?name=' + window.location.search.split("name=")[1].split("&")[0] + '&val=' + val
+      }}
+      e.preventDefault()
+      return false
+  }}
+
   var theEvent = evt || window.event;
 
   // Handle paste
