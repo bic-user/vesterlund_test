@@ -32,10 +32,10 @@ text-align: center;
 
 <p style="margin-left:5px">{}</p>
 
-<form>
-{} + {} =
-<input id="text" type="text" size="4" style="margin-top:5px">
-<button id="button" name="enter" style="margin-left:5px" style="margin-top:5px">Submit</button>
+<form style="margin-left:10px">
+<font size="6">{} + {} = </font> 
+<input style="font-size:25px;" id="text" type="text" onkeypress='validate(event)' size="4" style="margin-top:5px">
+<button id="button" name="enter" style="margin-left:5px">Submit</button>
 </form>
 
 <p style="margin-left:5px">{} seconds left...</p>
@@ -46,11 +46,29 @@ q('#text').focus()
 q('#button').addEventListener('click', function(e) {{
     val = q('#text').value.trim()
     if (name) {{
-        window.location = '/submit' + window.location.search + '&val=' + val
+        window.location = '/submit?name=' + window.location.search.split("name=")[1].split("&")[0] + '&val=' + val
     }}
     e.preventDefault()
     return false
 }})
+
+function validate(evt) {{
+  var theEvent = evt || window.event;
+
+  // Handle paste
+  if (theEvent.type === 'paste') {{
+      key = event.clipboardData.getData('text/plain');
+  }} else {{
+  // Handle key press
+      var key = theEvent.keyCode || theEvent.which;
+      key = String.fromCharCode(key);
+  }}
+  var regex = /[0-9]|\./;
+  if( !regex.test(key) ) {{
+    theEvent.returnValue = false;
+    if(theEvent.preventDefault) theEvent.preventDefault();
+  }}
+}}
 
 </script>
 
@@ -66,9 +84,20 @@ class Submit:
 
     def _get_opponent_for_scenario(self, scenario):
         query = Query()
-        opponents = self.db.search(query.round1_scenario == scenario or query.round2_scenario == scenario)
+        opponents = self.db.search(((query.round1_scenario == scenario) & query.round1) | \
+                                   ((query.round2_scenario == scenario) & query.round2))
         opponent_name = random.choice(opponents)['name']
         return opponent_name
+
+    def _get_time_left(self, name):
+        round_start = self.db.search(Query().name == name)[0]['round_start']
+        time_left = int(round(180.0 - time.time() + round_start))
+        return time_left
+
+    def _get_time_for_hit(self, name):
+        account = self.db.search(Query().name == name)[0]
+        time_spent = '%.1f' % (time.time() - account['hit_start'])
+        return time_spent
   
     def on_get(self, req, res):
 
@@ -82,17 +111,69 @@ class Submit:
         assert len(account) == 1
         account = account[0]
 
+        in_round1 = account['round1_started'] and not account['round1']
+        in_round2 = account['round2_started'] and not account['round2']
+        round1_not_started = (not account['round1_started']) and (not account['round1'])
+        round2_not_started = (not account['round2_started']) and (not account['round2'])
 
-        if (account['round1_started'] and not account['round1']) or (account['round2_started'] and not account['round2']):
+        if in_round1 or in_round2:
             # in process of round
-            prev_result = ''
-        elif (not account['round1_started']) or (not account['round2_started']):
+            suffix = '1' if in_round1 else '2'
+            scenario = account['round%s_scenario' % suffix]
+            is_tournament = in_round1 or (in_round2 and acc_update['round2_mode'] == 'tournament')
+            idx = account['idx']
+            time_left = self._get_time_left(name)
+
+            if time_left < 0:
+                acc_update = {'round%s_solved' % suffix: idx, 'round%s' % suffix: True}
+                self.db.update(acc_update, Query().name == name)        
+                if in_round1:
+                    # go to round 2
+                    pass
+                else:
+                    # say thanks 
+                    pass
+                return
+
+            val = req.params.get('val')
+            try:
+                val_int = int(val)
+            except ValueError:
+                val_int = -1
+            earned = account['earned']
+            hit_time = self._get_time_for_hit(name)
+            expected_sum = test_scenarios['a_%d' % scenario][idx] + test_scenarios['b_%d' % scenario][idx]
+            if val_int == expected_sum:
+                if is_tournament:
+                    opponent_name = account['round%s_opponent' % suffix]
+                    opponent = self.db.search(Query().name == opponent_name)[0]
+                    if opponent['round1_scenario'] == scenario:
+                        opponent_timings = opponent['round1_timings']
+                    elif opponent['round2_scenario'] == scenario:
+                        opponent_timings = opponent['round2_timings']
+                    else:
+                        raise
+                    if hit_time > opponent_timings[idx]:
+                        prev_result = 'You were correct, but your opponent was faster. Previous hit took %s, your balance %.2f$' % (hit_time, earned)
+                    else:
+                        earned += 0.1
+                        prev_result = 'You were correct and outperform the opponent. Previous hit took %s, you earned 0.1$, current balance %.2f$' % (hit_time, earned)
+                else:
+                    earned += 0.05
+                    prev_result = 'You were correct! Previous hit took %s, you earned 0.05$, current balance %.2f$' % (hit_time, earned)
+            else:
+                prev_result = 'You were wrong! Previous hit took %s, your balance %.2f$' % (hit_time, earned)
+            timings = account['round%s_timings' % suffix]
+            timings[idx] = hit_time
+            idx += 1
+            acc_update = {'idx': idx, 'hit_start': time.time(), 'round%s_timings' % suffix: timings, 'earned': earned}
+        elif round1_not_started or round2_not_started:
             # starting round: insert round start time, hit start time, idx, selected test scenario, selected opponent, round mode,
             # earned, timing for the the given round, toggle flag
             idx = 0
-            acc_update = {'round_start': time.time(), 'hit_start': time.time(),'idx': idx}
+            acc_update = {'round_start': time.time(), 'hit_start': time.time(),'idx': idx, 'round1_scenario': -1, 'round2_scenario': -1}
             scenario = random.randint(0, TEST_SCENARIOS_NUM)
-            if (not account['round1_started']):
+            if round1_not_started:
                 acc_update['round1_scenario'] = scenario
                 acc_update['round1_opponent'] = self._get_opponent_for_scenario(scenario)
                 acc_update['earned'] = 0.0
@@ -108,10 +189,11 @@ class Submit:
                 acc_update['round2_started'] = True
                 acc_update['round2_timings'] = self.db.search(Query().name == '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))[0]['round2_timings']
             prev_result = ''
-            self.db.update(acc_update, Query().name == name)        
+            time_left = 300 
+            
+        self.db.update(acc_update, Query().name == name)        
 
         res.content_type = 'text/html'
-        time_left = int(round(180.0 - time.time() + self.db.search(Query().name == name)[0]['round_start']))
         res.body = submit_body.format(prev_result,
                                       test_scenarios['a_%d' % scenario][idx],
                                       test_scenarios['b_%d' % scenario][idx],
