@@ -30,6 +30,7 @@ text-align: center;
 <body>
 <div>
 <p style="margin-left:5px">{}</p>
+<p style="margin-left:5px">{}</p>
 <p id="mode_selection">
 <input type="radio" name="mode" id="tournament" value="tournament" checked>
 <label for="tournament">Tournament</label>
@@ -69,20 +70,29 @@ class SelectMode:
         self.db = TinyDB('db.json')
 
     def on_get(self, req, res):
-        name = req.params.get('name')
         res.content_type = 'text/html'
+        name = req.params.get('name')
+        if not name:
+            res.body = message_body.format('Empty name')
+            return
 
         query = Query()
         account = self.db.search(query.name == name)
         if not account:
             self.db.insert({'name': name, 'round1': False, 'round2': False, 'round1_started': False, 'round2_started': False})
-            res.body = mode_body.format('Mode preselected for Round 1:', 'disabled')
+            res.body = mode_body.format('', 'Tournament mode preselected for Round 1:', 'disabled')
         else:
             assert(len(account) == 1)
-            if not account[0]['round1']:
-                res.body = mode_body.format('Mode preselected for Round 1:', 'disabled')
-            elif not account[0]['round2']:
-                res.body = mode_body.format('Select the mode for Round 2:', '')
+            account = account[0]
+            print('in mode')
+            print(account['round1'])
+            print(account['round2'])
+            if not account['round1']:
+                res.body = mode_body.format('', 'Tournament mode preselected for Round 1:', 'disabled')
+            elif not account['round2']:
+                msg = '%d submitted in Round 1; %d were correct; %d were faster than opponent. You earned %.2f$' % \
+                      (account['round1_solved'], account['round1_correct'], account['round1_faster'], account['earned'])
+                res.body = mode_body.format(msg, 'Select the mode for Round 2:', '')
             else:
-                earned = account[0]['earned']
+                earned = account['earned']
                 res.body = message_body.format('You already finished the test. You earned %.2f' % earned)
