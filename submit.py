@@ -144,6 +144,7 @@ class Submit:
                     raise falcon.HTTPMovedPermanently('http://127.0.0.1:8080/mode?name=%s' % name)            
                 else:
                     # say thanks 
+                    res.content_type = 'text/html'
                     res.body = message_body.format('You finished the test. Thanks! Your balance is %.2f' % account['earned']) 
             else:
                 val = req.params.get('val')
