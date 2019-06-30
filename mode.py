@@ -1,6 +1,7 @@
 
-from tinydb import TinyDB, Query
+import sqlite3
 
+from test_data import DB_PATH, column2list
 from message_body import *
 
 mode_body = '''<html><title>Vesterlund test</title>
@@ -64,10 +65,14 @@ function get_mode() {{
 </html>
 '''
 
+
 class SelectMode:
 
     def __init__(self):
-        self.db = TinyDB('db.json')
+        self.conn = sqlite3.connect(DB_PATH)
+
+    def __del__(self):
+        self.conn.close()
 
     def on_get(self, req, res):
         res.content_type = 'text/html'
@@ -76,17 +81,16 @@ class SelectMode:
             res.body = message_body.format('Empty name')
             return
 
-        query = Query()
-        account = self.db.search(query.name == name)
+        c = self.conn.cursor()
+        account = c.execute('SELECT * FROM testers WHERE name="{}"'.format(name)).fetchone()
+
         if not account:
-            self.db.insert({'name': name, 'round1': False, 'round2': False, 'round1_started': False, 'round2_started': False})
+            c.execute('INSERT INTO testers (name, round1, round2, round1_started, round2_started) VALUES '
+                      '("{}", 0, 0, 0, 0)'.format(name))
+            self.conn.commit()
             res.body = mode_body.format('', 'Tournament mode preselected for Round 1:', 'disabled')
         else:
-            assert(len(account) == 1)
-            account = account[0]
-            print('in mode')
-            print(account['round1'])
-            print(account['round2'])
+            account = column2list(account)
             if not account['round1']:
                 res.body = mode_body.format('', 'Tournament mode preselected for Round 1:', 'disabled')
             elif not account['round2']:

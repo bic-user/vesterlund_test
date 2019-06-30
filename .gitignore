@@ -1,4 +1,5 @@
 test_scenarios.npz
 db.json
+sqlite_db
 *.pyc
 

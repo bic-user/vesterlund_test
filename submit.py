@@ -1,7 +1,7 @@
 import time
 import random
 import falcon
-from tinydb import TinyDB, Query
+import sqlite3
 
 from test_data import *
 from message_body import *
@@ -105,31 +105,34 @@ def _get_submitted_val(request):
 class Submit:
 
     def __init__(self):
-        self.db = TinyDB('db.json')
+        self.conn = sqlite3.connect(DB_PATH)
+
+    def __del__(self):
+        self.conn.close()
 
     def _get_opponent_for_scenario(self, scenario):
-        query = Query()
-        opponents = self.db.search(((query.round1_scenario == scenario) & query.round1) | \
-                                   ((query.round2_scenario == scenario) & query.round2))
-        opponent_name = random.choice(opponents)['name']
+        c = self.conn.cursor()
+        opponents = c.execute('SELECT * FROM testers WHERE ((round1_scenario={} AND round1=1) OR '
+                                   '(round2_scenario={} AND round2=1))'.format(scenario, scenario)).fetchall()
+        opponent_name = random.choice(opponents)[0]
         return opponent_name
 
     def _get_time_left(self, name):
-        round_start = self.db.search(Query().name == name)[0]['round_start']
+        c = self.conn.cursor()
+        round_start = column2list(c.execute('SELECT * FROM testers WHERE name="{}"'.format(name)).fetchone())['round_start']
         time_left = int(round(SECONDS - time.time() + round_start))
         return time_left
 
     def _get_time_for_hit(self, name):
-        account = self.db.search(Query().name == name)[0]
-        time_spent = '%.1f' % (time.time() - account['hit_start'])
+        c = self.conn.cursor()
+        account = column2list(c.execute('SELECT * FROM testers WHERE name="{}"'.format(name)).fetchone())
+        time_spent = time.time() - account['hit_start']
         return time_spent
 
     def _handle_no_time_left(self, name, res, suffix, in_round1, account):
-        acc_update = {'round%s_solved' % suffix: account['idx'], 'round%s' % suffix: True}
-        print('round%s' % suffix)
-        print(acc_update['round%s' % suffix])
-        self.db.update(acc_update, Query().name == name)
-        #print(self.db.search(Query().name == name)[0]['round%s' % suffix])
+        c = self.conn.cursor()
+        c.execute('UPDATE testers SET round{}_solved={}, round{}=1 WHERE name="{}"'.format(suffix, account['idx'], suffix, name))
+        self.conn.commit()
         if in_round1:
             # go to round 2
             raise falcon.HTTPMovedPermanently('http://127.0.0.1:8080/mode?name=%s' % name)
@@ -145,6 +148,7 @@ class Submit:
         idx = account['idx']
         time_left = self._get_time_left(name)
 
+        c = self.conn.cursor()
         if time_left < 0:
             self._handle_no_time_left(name, res, suffix, in_round1, account)
         else:
@@ -152,12 +156,12 @@ class Submit:
             earned = account['earned']
             hit_time = self._get_time_for_hit(name)
             expected_sum = test_scenarios['a_%d' % scenario][idx] + test_scenarios['b_%d' % scenario][idx]
-            acc_update = {}
+            acc_update = ''
             if val == expected_sum:
-                acc_update['round%s_correct' % suffix] = account['round%s_correct' % suffix] + 1
+                acc_update = '%s, round%s_correct=%d' % (acc_update, suffix, account['round%s_correct' % suffix] + 1)
                 if is_tournament:
                     opponent_name = account['round%s_opponent' % suffix]
-                    opponent = self.db.search(Query().name == opponent_name)[0]
+                    opponent = column2list(c.execute('SELECT * FROM testers WHERE name="{}"'.format(opponent_name)).fetchone())
                     if opponent['round1_scenario'] == scenario:
                         opponent_timings = opponent['round1_timings']
                     elif opponent['round2_scenario'] == scenario:
@@ -165,26 +169,28 @@ class Submit:
                     else:
                         raise
                     if hit_time > opponent_timings[idx]:
-                        prev_result = 'You were correct, but your opponent was faster. Previous hit took %s, your balance %.2f$' % (
+                        prev_result = 'You were correct, but your opponent was faster. Previous hit took %.2f, your balance %.2f$' % (
                         hit_time, earned)
                     else:
                         earned += 0.1
-                        prev_result = 'You were correct and outperform the opponent. Previous hit took %s, you earned 0.1$, current balance %.2f$' % (
+                        prev_result = 'You were correct and outperform the opponent. Previous hit took %.2f, you earned 0.1$, current balance %.2f$' % (
                         hit_time, earned)
-                        acc_update['round%s_faster' % suffix] = account['round%s_correct' % suffix] + 1
+                        acc_update = '%s, round%s_faster=%d' % (acc_update, suffix, account['round%s_faster' % suffix] + 1)
                 else:
                     earned += 0.05
-                    prev_result = 'You were correct! Previous hit took %s, you earned 0.05$, current balance %.2f$' % \
+                    prev_result = 'You were correct! Previous hit took %.2f, you earned 0.05$, current balance %.2f$' % \
                                   (hit_time, earned)
-                    acc_update['round%s_faster' % suffix] = account['round%s_correct' % suffix] + 1
+                    acc_update = '%s, round%s_faster=%d' % (acc_update, suffix, account['round%s_faster' % suffix] + 1)
             else:
-                prev_result = 'You were wrong! Previous hit took %s, your balance %.2f$' % (hit_time, earned)
+                prev_result = 'You were wrong! Previous hit took %.2f, your balance %.2f$' % (hit_time, earned)
             timings = account['round%s_timings' % suffix]
             timings[idx] = hit_time
             idx += 1
-            acc_update.update({'idx': idx, 'hit_start': time.time(), 'round%s_timings' % suffix: timings,
-                               'earned': earned})
-            self.db.update(acc_update, Query().name == name)
+
+            acc_update = '{}, idx={}, hit_start={}, round{}_timings="{}", earned={}'.format(
+                acc_update, idx, time.time(), suffix, serialize_timings(timings), earned)
+            c.execute('UPDATE testers SET {} WHERE name="{}"'.format(acc_update.strip(', '), name))
+            self.conn.commit()
             res.body = submit_body.format(prev_result,
                                           test_scenarios['a_%d' % scenario][idx],
                                           test_scenarios['b_%d' % scenario][idx],
@@ -192,30 +198,28 @@ class Submit:
 
     def _start_round(self, name, account, req, res, round1_not_started):
         idx = 0
-        acc_update = {'round_start': time.time(), 'hit_start': time.time(), 'idx': idx}
+        acc_update = 'round_start={}, hit_start={}, idx={}'.format(time.time(), time.time(), idx)
         scenario = random.randint(0, TEST_SCENARIOS_NUM)
+        c = self.conn.cursor()
         if round1_not_started:
-            acc_update['round1_scenario'] = scenario
-            acc_update['round1_opponent'] = self._get_opponent_for_scenario(scenario)
-            acc_update['round1_correct'] = 0
-            acc_update['round1_faster'] = 0
-            acc_update['earned'] = 0.0
-            acc_update['round1_started'] = True
-            acc_update['round1_timings'] = \
-            self.db.search(Query().name == '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))[0]['round1_timings']
+            timings = column2list(c.execute('SELECT * FROM testers WHERE name="{}"'.format(
+                '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))).fetchone())['round1_timings']
+            acc_update = '{}, round1_scenario={}, round1_opponent="{}", round1_correct=0, round1_faster=0, earned=0, ' \
+                         'round1_started=1, round1_timings="{}"'.format(
+                acc_update, scenario, self._get_opponent_for_scenario(scenario), serialize_timings(timings))
         else:
             while scenario == account['round1_scenario']:
                 scenario = random.randint(0, TEST_SCENARIOS_NUM)
-            acc_update['round2_scenario'] = scenario
-            acc_update['round2_correct'] = 0
-            acc_update['round2_faster'] = 0
-            acc_update['round2_mode'] = req.params.get('mode')
-            if acc_update['round2_mode'] == 'tournament':
-                acc_update['round2_opponent'] = self._get_opponent_for_scenario(scenario)
-            acc_update['round2_started'] = True
-            acc_update['round2_timings'] = self.db.search(
-                Query().name == '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))[0]['round2_timings']
-        self.db.update(acc_update, Query().name == name)
+
+            timings = column2list(c.execute('SELECT * FROM testers WHERE name="{}"'.format(
+                '%s%d' % (RANDOMIZED_OPPONENT_NAME, scenario))).fetchone())['round2_timings']
+            acc_update = '{}, round2_scenario={}, round2_correct=0, round2_faster=0, round2_mode="{}", ' \
+                         'round2_opponent="{}", round2_started=1, round2_timings="{}"'.format(
+                acc_update, scenario, req.params.get('mode'), self._get_opponent_for_scenario(scenario),
+                serialize_timings(timings))
+        c.execute('UPDATE testers SET {} WHERE name="{}"'.format(acc_update, name))
+        self.conn.commit()
+
         res.body = submit_body.format('',
                                       test_scenarios['a_%d' % scenario][idx],
                                       test_scenarios['b_%d' % scenario][idx],
@@ -230,15 +234,8 @@ class Submit:
             res.body = message_body.format('Empty name')
             return
 
-        query = Query()
-        account = self.db.search(query.name == name)
-
-        if len(account) != 1:
-            self.db.remove(Query().name == name)
-            res.body = message_body.format('Unexpected amount of records for %s. Removed' % name)
-            return
-
-        account = account[0]
+        c = self.conn.cursor()
+        account = column2list(c.execute('SELECT * FROM testers WHERE name="{}"'.format(name)).fetchone())
 
         in_round1 = account['round1_started'] and not account['round1']
         in_round2 = account['round2_started'] and not account['round2']
@@ -252,5 +249,6 @@ class Submit:
         elif account['round1'] and account['round2']:
             res.body = message_body.format('Test is finished. Balance %.2f$' % account['earned'])
         else:
-            self.db.remove(Query().name == name)
-            res.body = message_body.format('Unexpected state. %s deleted' % name)
+            c = self.conn.cursor()
+            c.execute('DELETE FROM testers WHERE name="{}"'.format(name))
+            self.conn.commit()
