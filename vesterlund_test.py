@@ -12,4 +12,4 @@ api.add_route('/submit', Submit())
 
 if __name__ == '__main__':
     from wsgiref import simple_server
-    simple_server.make_server('0.0.0.0', 8080, api).serve_forever()
+    simple_server.make_server('0.0.0.0', int(PORT), api).serve_forever()

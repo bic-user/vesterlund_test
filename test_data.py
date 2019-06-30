@@ -4,15 +4,16 @@ import argparse
 import sqlite3
 import numpy as np
 
-
+PORT = '8080'
+LOCATION = 'http://127.0.0.1'
 DB_PATH = 'sqlite_db'
 RANDOMIZED_OPPONENT_NAME = 'gAjIz8p7LA'
 
-RANDOMIZED_OPPONENT_MEAN_TIME = 1.0
-RANDOMIZED_OPPONENT_STD_TIME = 0.2
+RANDOMIZED_OPPONENT_MEAN_TIME = 3.5
+RANDOMIZED_OPPONENT_STD_TIME = 1.0
 
-MAX_COMPLETED_HITS = 600 # if each example takes 0.3 seconds
-SECONDS = 30
+MAX_COMPLETED_HITS = 400  # if each example takes 0.3 seconds
+SECONDS = 300
 
 TEST_SCENARIOS_PATH = 'test_scenarios.npz'
 TEST_SCENARIOS_NUM = 10

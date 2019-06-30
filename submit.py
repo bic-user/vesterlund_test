@@ -135,7 +135,7 @@ class Submit:
         self.conn.commit()
         if in_round1:
             # go to round 2
-            raise falcon.HTTPMovedPermanently('http://127.0.0.1:8080/mode?name=%s' % name)
+            raise falcon.HTTPMovedPermanently('%s:%s/mode?name=%s' % (LOCATION, PORT, name))
         else:
             # say thanks
             res.body = message_body.format('You finished the test. Thanks! Your balance is %.2f' % account['earned'])
